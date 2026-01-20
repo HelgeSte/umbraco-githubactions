@@ -1,0 +1,74 @@
+name: Build and Deploy to IIS via Web Deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  CONFIGURATION: "Release"
+  PUBLISH_DIR: "publish"
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration ${{ env.CONFIGURATION }} --no-restore
+
+      - name: Publish
+        run: dotnet publish --configuration ${{ env.CONFIGURATION }} --no-build --output ${{ env.PUBLISH_DIR }}
+
+      - name: Install Web Deploy (msdeploy)
+        shell: pwsh
+        run: |
+          choco install webdeploy -y
+
+          # Find msdeploy.exe reliably (path can vary)
+          $msdeploy = Get-ChildItem "C:\Program Files\IIS" -Recurse -Filter msdeploy.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $msdeploy) { throw "msdeploy.exe not found after Web Deploy install" }
+
+          "MSDEPLOY_PATH=$msdeploy" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Using msdeploy: $msdeploy"
+
+      - name: Deploy via msdeploy (WMSvc :8172)
+        shell: pwsh
+        run: |
+          $msdeploy = "${{ env.MSDEPLOY_PATH }}"
+
+          $server = "${{ secrets.WEBDEPLOY_SERVER }}"
+          $site   = "${{ secrets.WEBDEPLOY_SITE }}"
+          $user   = "${{ secrets.WEBDEPLOY_USER }}"
+          $pass   = "${{ secrets.WEBDEPLOY_PASSWORD }}"
+
+          $sourcePath = Join-Path "${{ github.workspace }}" "${{ env.PUBLISH_DIR }}"
+
+          $args = @(
+            "-verb:sync"
+            "-source:contentPath=$sourcePath"
+            "-dest:contentPath=$site,wmsvc=$server,userName=$user,password=$pass,authType=Basic"
+            "-enableRule:AppOffline"
+            "-retryAttempts:2"
+            "-allowUntrusted"
+          )
+
+          & $msdeploy @args
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "msdeploy failed with exit code $LASTEXITCODE"
+          }
