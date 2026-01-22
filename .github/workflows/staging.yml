@@ -3,7 +3,7 @@ name: Build and Deploy to IIS via Web Deploy
 on:
   push:
     branches: [ "staging" ]
-  workflow_dispatch:
+  #workflow_dispatch:
 
 env:
   DOTNET_VERSION: "8.0.x"
